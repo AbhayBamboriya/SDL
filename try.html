@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Stipend Point Allocator</title>
+    <style>
+        body {
+  font-family: Arial, sans-serif;
+  line-height: 1.6;
+  margin: 0;
+  padding: 20px;
+  background-color: #f4f4f4;
+  box-sizing: border-box; /* added */
+}
+
+.container {
+  max-width: 800px;
+  margin: auto;
+  background: white;
+  padding: 20px;
+  border-radius: 5px;
+  box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+  overflow: hidden; /* added */
+}
+
+h1, h2 {
+  color: #333;
+  margin-bottom: 10px; /* added */
+}
+
+input[type="file"], button {
+  margin-bottom: 20px;
+  padding: 10px 20px; /* added */
+  border: none; /* added */
+  border-radius: 5px; /* added */
+  background-color: #4CAF50; /* added */
+  color: #fff; /* added */
+  cursor: pointer; /* added */
+}
+
+input[type="file"]:focus, button:focus {
+  outline: none; /* added */
+  box-shadow: 0 0 5px rgba(0, 0, 0, 0.2); /* added */
+}
+
+#result, #rangeInputs {
+  margin-top: 20px;
+  border-top: 1px solid #ddd;
+  padding-top: 20px;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 20px;
+}
+
+th, td {
+  border: 1px solid #ddd;
+  padding: 8px;
+  text-align: left;
+}
+
+th {
+  background-color: #f2f2f2;
+}
+
+.range-input-group {
+  margin-bottom: 10px;
+  display: flex; /* added */
+  align-items: center; /* added */
+}
+
+.range-input-group label {
+  margin-right: 10px; /* added */
+}
+
+.range-input-group input[type="number"] {
+  width: 50px; /* added */
+  padding: 5px; /* added */
+  border: 1px solid #ccc; /* added */
+  border-radius: 5px; /* added */
+}
+
+.range-input-group button {
+  margin-left: 10px; /* added */
+}
+
+#cameraPreview {
+  width: 100%;
+  max-width: 100%;
+  margin-top: 20px;
+  display: none;
+  border: 1px solid #ddd; /* added */
+  border-radius: 5px; /* added */
+  padding: 10px; /* added */
+}
+
+#capturedImage {
+  margin-top: 20px;
+  max-width: 100%;
+  border: 1px solid #ddd; /* added */
+  border-radius: 5px; /* added */
+  padding: 10px; /* added */
+}
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@2/dist/tesseract.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.0/dist/jspdf.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/jspdf-autotable@3.5.24/dist/jspdf.plugin.autotable.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <h1>Stipend Point Allocator</h1>
+        
+        <h2>Upload File</h2>
+        <input type="file" id="fileInput" accept=".csv">
+        <button onclick="processFile()">Process File</button>
+        <div id="result"></div>
+
+        <h2>Scan Document</h2>
+        <button onclick="startCamera()">Start Camera</button>
+        <button onclick="captureImage()">Capture Image</button>
+        <video id="cameraPreview" autoplay playsinline></video>
+        <img id="capturedImage" alt="Captured Document">
+    </div>
+
+    <script>
+        let processedData = [];
+        let maxStipend = 0;
+        let userRanges = [];
+        let videoStream = null;
+
+        function processFile() {
+            const fileInput = document.getElementById('fileInput');
+            const file = fileInput.files[0];
+            
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    if (e?.target?.result) processContent(e.target.result);
+                };
+                reader.readAsText(file);
+            } else {
+                alert('Please select a file.');
+            }
+        }
+
+        function processContent(content) {
+            const lines = content.split('\n');
+            const headers = lines[0].split(',');
+            const stipendIndex = headers.indexOf('Stipend');
+            
+            if (stipendIndex === -1) {
+                alert('Stipend column not found in the CSV file.');
+                return;
+            }
+
+            processedData = [headers];
+
+            for (let i = 1; i < lines.length; i++) {
+                const values = lines[i].split(',');
+                if (values.length > stipendIndex) {
+                    const stipend = parseFloat(values[stipendIndex]);
+                    if (isNaN(stipend)) continue;
+                    maxStipend = Math.max(maxStipend, stipend);
+                    processedData.push(values); 
+                }
+            }
+
+            renderTable(false); 
+        }
+
+        function addRangeInput() {
+            const rangeInputsDiv = document.getElementById('rangeInputs');
+            const rangeIndex = rangeInputsDiv.children.length;
+            const previousToValue = rangeIndex > 0 ? document.getElementById(`rangeTo${rangeIndex - 1}`).value : 0;
+            
+            const rangeInputHtml = `
+                <div class="range-input-group">
+                    <label>Range ${rangeIndex + 1}:</label>
+                    <input type="number" id="rangeFrom${rangeIndex}" value="${previousToValue}" placeholder="From" min="0" step="0.01" ${rangeIndex === 0 ? 'readonly' : ''}>
+                    <input type="number" id="rangeTo${rangeIndex}" placeholder="To" min="${previousToValue}" step="0.01" onchange="updateNextFrom(${rangeIndex})">
+                    <span> - Points: </span>
+                    <input type="number" id="rangePoints${rangeIndex}" placeholder="Points" min="1" step="1">
+                    <button onclick="removeRangeInput(this)">Remove</button>
+                </div>
+            `;
+            rangeInputsDiv.insertAdjacentHTML('beforeend', rangeInputHtml);
+        }
+
+        function updateNextFrom(index) {
+            const currentTo = parseFloat(document.getElementById(`rangeTo${index}`).value);
+            const nextFromInput = document.getElementById(`rangeFrom${index + 1}`);
+
+            if (nextFromInput) {
+                nextFromInput.value = currentTo;
+                nextFromInput.min = currentTo;
+            }
+        }
+
+        function removeRangeInput(button) {
+            button.parentElement.remove();
+        }
+
+        function applyRanges() {
+            userRanges = [];
+            const rangeInputsDiv = document.getElementById('rangeInputs');
+            const rangeGroups = rangeInputsDiv.getElementsByClassName('range-input-group');
+
+            for (let i = 0; i < rangeGroups.length; i++) {
+                const from = parseFloat(document.getElementById(`rangeFrom${i}`).value);
+                const to = parseFloat(document.getElementById(`rangeTo${i}`).value);
+                const points = parseInt(document.getElementById(`rangePoints${i}`).value, 10);
+
+                if (isNaN(from) || isNaN(to) || isNaN(points) || from > to) {
+                    alert('Please enter valid range values.');
+                    return;
+                }
+
+                userRanges.push({ from, to, points });
+            }
+
+            if (userRanges.length === 0 || userRanges[userRanges.length - 1].to < maxStipend) {
+                alert('Please ensure the ranges cover all stipends up to the maximum stipend (' + maxStipend + ').');
+                return;
+            }
+
+            const pointsIndex = processedData[0].indexOf("Points");
+            if (pointsIndex !== -1) {
+                processedData.forEach(row => row.splice(pointsIndex, 1)); 
+            }
+
+            processedData[0].push("Points");
+
+            processedData.forEach((row, index) => {
+                if (index === 0) return; 
+
+                const stipend = parseFloat(row[processedData[0].indexOf('Stipend')]);
+                let points = 0;
+
+                for (const range of userRanges) {
+                    if (stipend >= range.from && stipend <= range.to) {
+                        points = range.points;
+                        break;
+                    }
+                }
+
+                row.push(points); 
+            });
+
+            renderTable(true); 
+        }
+
+        function renderTable(includePoints) {
+            let resultHtml = '<h2>Results</h2><table><tr>' + 
+                processedData[0].map(h => `<th>${h}</th>`).join('');
+            
+            resultHtml += '</tr>';
+
+            for (let i = 1; i < processedData.length; i++) {
+                const values = processedData[i];
+                resultHtml += '<tr>' + 
+                    values.map(v => `<td>${v}</td>`).join('');
+                
+                resultHtml += '</tr>';
+            }
+
+            resultHtml += '</table>';
+            resultHtml += '<p>Maximum Stipend: ' + maxStipend + '</p>';
+            resultHtml += '<h2>Define Stipend Range Points</h2>';
+            resultHtml += '<div id="rangeInputs"></div>';
+            resultHtml += '<button onclick="addRangeInput()">Add Range</button>';
+            resultHtml += '<button onclick="applyRanges()">Apply Ranges</button>';
+            resultHtml += '<button onclick="downloadPDF()">Download Updated PDF</button>';
+            resultHtml += '<button onclick="shareOnWhatsApp()">Share on WhatsApp</button>';
+            
+            document.getElementById('result').innerHTML = resultHtml;
+        }
+
+        function downloadPDF() {
+            const { jsPDF } = window.jspdf;
+            const doc = new jsPDF();
+            const headers = processedData[0];
+            const rows = processedData.slice(1);
+
+            // Generate the table in the PDF
+            doc.autoTable({ head: [headers], body: rows });
+
+            // Save the generated PDF
+            doc.save('updated_stipend_data.pdf');
+        }
+
+        function shareOnWhatsApp() {
+            const { jsPDF } = window.jspdf;
+            const doc = new jsPDF();
+            const headers = processedData[0];
+            const rows = processedData.slice(1);
+
+            // Generate PDF
+            doc.autoTable({ head: [headers], body: rows });
+            const pdfBlob = doc.output('blob'); // Create a blob of the PDF
+
+            // Prepare FormData for File.io
+            const formData = new FormData();
+            formData.append('file', pdfBlob, 'updated_stipend_data.pdf');
+
+            // Upload the PDF to File.io
+            fetch('https://file.io', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(result => {
+                if (result.success && result.link) {
+                    const message = `Check out this updated PDF! ${result.link}`;
+                    // Generate WhatsApp share link
+                    window.open(`https://wa.me/?text=${encodeURIComponent(message)}`);
+                } else {
+                    alert('Error uploading PDF: ' + result.message);
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                alert('Error uploading PDF');
+            });
+        }
+
+        function startCamera() {
+            const constraints = {
+                video: {
+                    width: { ideal: 640 }, 
+                    height: { ideal: 480 },
+                }
+            };
+
+            navigator.mediaDevices.getUserMedia(constraints)
+                .then(stream => {
+                    const cameraPreview = document.getElementById('cameraPreview');
+                    cameraPreview.style.display = 'block';
+                    cameraPreview.srcObject = stream;
+                    videoStream = stream;
+                })
+                .catch(error => {
+                    console.error('Error accessing camera:', error);
+                    alert('Could not access the camera. Please check your permissions.');
+                });
+        }
+
+        function captureImage() {
+            if (!videoStream) {
+                alert('Camera is not started. Please click on Start Camera button.');
+                return;
+            }
+
+            const cameraPreview = document.getElementById('cameraPreview');
+            const canvas = document.createElement('canvas');
+            const context = canvas.getContext('2d');
+            canvas.width = cameraPreview.videoWidth;
+            canvas.height = cameraPreview.videoHeight;
+            context.drawImage(cameraPreview, 0, 0, canvas.width, canvas.height);
+
+            const capturedImage = document.getElementById('capturedImage');
+            capturedImage.src = canvas.toDataURL('image/png', 0.8);
+
+            // Stop the video stream to save resources
+            videoStream.getTracks().forEach(track => track.stop());
+            videoStream = null;
+
+            // Display the captured image
+            capturedImage.style.display = 'block';
+
+            Tesseract.recognize(capturedImage.src, 'eng', { logger: m => console.log(m) })
+                .then(({ data: { text } }) => {
+                    console.log('tt',text);
+                    // <p>{text}</p>
+                    alert('OCR Result: ' + text);
+                })
+                .catch(error => {
+                    console.error('Error during OCR processing:', error);
+                    alert('Could not process the image. Please try again.');
+                });
+        }
+
+    </script>
+</body>
+</html>
